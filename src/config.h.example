@@ -11,7 +11,18 @@
 
 // --- UDP status / logging ---
 #define LOG_PORT             9001   // capture with: nc -lup 9001  (see udp-monitor.sh)
-#define STATUS_INTERVAL_MS   2000   // how often to broadcast a status line
+#define STATUS_INTERVAL_MS   2000   // how often to log a status line
+
+// --- I2C / AS7343 sensor ---
+#define I2C_SDA          8
+#define I2C_SCL          9
+#define AS7343_INT_PIN   17    // sensor INT -> ESP32 (reserved, not used yet)
+#define AS7343_GPIO_PIN  18    // sensor GPIO -> ESP32 (reserved, not used yet)
+#define AS7343_GAIN      7     // 0..12 = 0.5x..2048x (as7343_gain_t); 7 = 64x
+
+// --- OSC sensor stream ---
+#define OSC_PORT             9000   // host listens here for /as7343 messages
+#define SAMPLE_INTERVAL_MS   100    // min gap between sensor reads
 
 // --- Firmware identity ---
-#define FW_VERSION "0.1.0-scaffold"
+#define FW_VERSION "0.2.0-sensor"

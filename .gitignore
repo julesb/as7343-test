@@ -1,2 +1,4 @@
 .pio
 src/config.h
+__pycache__/
+*.pyc
