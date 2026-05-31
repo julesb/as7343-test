@@ -8,7 +8,9 @@ chart of the spectral channels, updating in place.
 No external dependencies -- pure stdlib with a minimal OSC decoder.
 
 Usage:
-    ./as7343_viz.py [hostname]      # default: esp32-spectral
+    ./as7343_viz.py [hostname]            # default: esp32-spectral
+    ./as7343_viz.py [hostname] --raw      # show the unmapped 18-channel buffer
+                                          # (diagnostic: verify channel mapping)
 """
 
 import socket
@@ -16,7 +18,9 @@ import struct
 import sys
 import time
 
-DEVICE = sys.argv[1] if len(sys.argv) > 1 else "esp32-spectral"
+RAW_MODE = "--raw" in sys.argv
+_args = [a for a in sys.argv[1:] if not a.startswith("-")]
+DEVICE = _args[0] if _args else "esp32-spectral"
 REGISTER_PORT = 9001   # firmware learns our IP from any datagram here (LOG_PORT)
 OSC_PORT = 9000        # we listen here for /as7343 messages
 REGISTER_EVERY = 3.0   # re-announce so the device re-learns us after a reboot
@@ -27,6 +31,15 @@ BANDS = [
     ("F1", 405), ("F2", 425), ("FZ", 450), ("F3", 475), ("F4", 515),
     ("F5", 550), ("FY", 555), ("FXL", 600), ("F6", 640), ("F7", 690),
     ("F8", 745), ("NIR", 855), ("Clear", None),
+]
+
+# Unmapped buffer order as the library/SMUX returns it, for --raw diagnostics.
+# Index = position in readAllChannels(); VIS = broadband clear (repeated).
+RAW_BANDS = [
+    ("FZ", 450), ("FY", 555), ("FXL", 600), ("NIR", 855), ("VIS", None),
+    ("VIS", None), ("F2", 425), ("F3", 475), ("F4", 515), ("F6", 640),
+    ("VIS", None), ("VIS", None), ("F1", 405), ("F7", 690), ("F8", 745),
+    ("F5", 550), ("VIS", None), ("VIS", None),
 ]
 
 
@@ -82,9 +95,10 @@ def parse_osc(data):
     return addr, args
 
 
-def render(values, meta):
+def render(values, meta, bands=BANDS, show_index=False):
     out = ["\x1b[H"]  # cursor home
-    out.append(f"AS7343  <-  {DEVICE}   (gain_idx={meta.get('gain', '?')} "
+    title = "AS7343 RAW (unmapped buffer)" if show_index else "AS7343"
+    out.append(f"{title}  <-  {DEVICE}   (gain_idx={meta.get('gain', '?')} "
                f"int={meta.get('int_ms', '?')}ms)\x1b[0K\n")
     sat = ""
     if meta.get("asat"):
@@ -94,12 +108,13 @@ def render(values, meta):
     out.append(f"peak={max(values) if values else 0}{sat}\x1b[0K\n\n")
 
     scale = max(max(values), 1) if values else 1
-    for (name, nm), val in zip(BANDS, values):
+    for i, ((name, nm), val) in enumerate(zip(bands, values)):
         r, g, b = wavelength_to_rgb(nm)
         n = int(round(val / scale * BAR_WIDTH))
         bar = f"\x1b[38;2;{r};{g};{b}m" + "█" * n + "\x1b[0m"
         label = f"{name:>5}" + (f" {nm}nm" if nm else "  clear")
-        out.append(f"{label:>12} {bar}{' ' * (BAR_WIDTH - n)} {val:>5}\x1b[0K\n")
+        prefix = f"[{i:>2}] " if show_index else ""
+        out.append(f"{prefix}{label:>12} {bar}{' ' * (BAR_WIDTH - n)} {val:>5}\x1b[0K\n")
     out.append("\x1b[0J")  # clear anything below
     sys.stdout.write("".join(out))
     sys.stdout.flush()
@@ -137,7 +152,9 @@ def main():
             if address == "/as7343/meta" and len(args) >= 4:
                 meta = {"gain": args[0], "int_ms": round(args[1], 1),
                         "asat": args[2], "dsat": args[3]}
-            elif address == "/as7343/spectral" and args:
+            elif address == "/as7343/raw" and args and RAW_MODE:
+                render(args, meta, bands=RAW_BANDS, show_index=True)
+            elif address == "/as7343/spectral" and args and not RAW_MODE:
                 render(args, meta)
     except KeyboardInterrupt:
         pass

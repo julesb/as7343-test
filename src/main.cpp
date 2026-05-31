@@ -127,6 +127,12 @@ void readAndStream() {
     spectral.add((int32_t)clear);
     sendOSC("/as7343/spectral", spectral);
 
+    // /as7343/raw <18 ints> -- unmapped buffer in library/SMUX order, for
+    // diagnosing the channel mapping (host/as7343_viz.py --raw).
+    OSCMessage raw("/as7343/raw");
+    for (uint8_t i = 0; i < 18; i++) raw.add((int32_t)buf[i]);
+    sendOSC("/as7343/raw", raw);
+
     // /as7343/meta <gain_idx int> <intTime ms float> <analogSat int> <digitalSat int>
     OSCMessage meta("/as7343/meta");
     meta.add((int32_t)AS7343_GAIN);

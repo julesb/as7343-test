@@ -7,7 +7,13 @@ decoder.
 ```sh
 ./as7343_viz.py                 # device defaults to esp32-spectral
 ./as7343_viz.py 192.168.1.106   # or pass a hostname / IP
+./as7343_viz.py --raw           # diagnostic: show the unmapped 18-channel buffer
 ```
+
+`--raw` shows the sensor's raw `readAllChannels()` buffer in library/SMUX order
+with each entry's index and label, instead of the wavelength-sorted view. Use it
+to verify the channel mapping on real silicon — shine a narrow-band source and
+confirm the expected index responds.
 
 It registers with the device (sends a datagram to UDP 9001 so the firmware
 learns where to stream), then listens on UDP 9000 and redraws on every frame.
