@@ -5,16 +5,19 @@
 
 #include "config.h"
 
-// Phase 1 scaffold: WiFi + OTA + periodic UDP status broadcast.
+// Phase 1 scaffold: WiFi + OTA + periodic UDP status messages.
 // No sensor yet -- this just confirms the board flashes, joins WiFi,
 // accepts OTA updates, and that we can see it from the host with nc.
 
 WiFiUDP udp;
-IPAddress broadcastIP;
+IPAddress statusDest;   // host to send status to; learned from incoming packets
 
-// Print to serial and broadcast over UDP to LOG_PORT. We broadcast (rather
-// than unicast to a known host) so any machine on the LAN running
-// `nc -lup 9001` receives the messages without a prior handshake.
+// Print to serial and, once a host has registered, unicast to it on LOG_PORT.
+// We unicast to a learned destination rather than broadcast: OpenBSD nc (the
+// Debian default) connect()s to the first sender in UDP listen mode, after
+// which it only accepts unicast to this host's address -- broadcasts would be
+// dropped after the first packet. The host registers by sending us any UDP
+// datagram on LOG_PORT (see udp-monitor.sh).
 void udpLog(const char* fmt, ...) {
     char buf[256];
     va_list args;
@@ -24,8 +27,8 @@ void udpLog(const char* fmt, ...) {
 
     Serial.print(buf);
 
-    if (WiFi.status() == WL_CONNECTED) {
-        udp.beginPacket(broadcastIP, LOG_PORT);
+    if (statusDest && WiFi.status() == WL_CONNECTED) {
+        udp.beginPacket(statusDest, LOG_PORT);
         udp.print(buf);
         udp.endPacket();
     }
@@ -39,14 +42,7 @@ void connectWiFi() {
         delay(500);
         Serial.print(".");  // no WiFi yet, serial only
     }
-
-    // Derive the subnet broadcast address (e.g. 192.168.1.255).
-    broadcastIP = WiFi.localIP();
-    broadcastIP[3] = 255;
-
-    Serial.printf("\nConnected! IP: %s  broadcast: %s\n",
-                  WiFi.localIP().toString().c_str(),
-                  broadcastIP.toString().c_str());
+    Serial.printf("\nConnected! IP: %s\n", WiFi.localIP().toString().c_str());
 }
 
 void setup() {
@@ -61,6 +57,8 @@ void setup() {
     ArduinoOTA.onError([](ota_error_t error) { udpLog("OTA error [%u]\n", error); });
     ArduinoOTA.begin();
 
+    udp.begin(LOG_PORT);   // listen for host registration packets
+
     udpLog("Booted '%s' fw=%s ip=%s\n", OTA_HOSTNAME, FW_VERSION,
            WiFi.localIP().toString().c_str());
 }
@@ -74,6 +72,17 @@ void loop() {
     if (WiFi.status() != WL_CONNECTED) {
         udpLog("WiFi lost, reconnecting...\n");
         connectWiFi();
+    }
+
+    // Any incoming datagram registers (or updates) the status destination.
+    int packetSize = udp.parsePacket();
+    if (packetSize > 0) {
+        IPAddress src = udp.remoteIP();
+        while (udp.available()) udp.read();   // drain payload, we don't need it
+        if (statusDest != src) {
+            statusDest = src;
+            udpLog("status dest -> %s:%d\n", statusDest.toString().c_str(), LOG_PORT);
+        }
     }
 
     unsigned long now = millis();

@@ -46,16 +46,22 @@ Subsequent flashes over the air:
 
 ## Monitoring
 
-The firmware broadcasts a status line on UDP port 9001 every couple of seconds.
-Capture it on the host with:
+The firmware unicasts a status line on UDP port 9001 every couple of seconds,
+but only once a host has registered. `udp-monitor.sh` registers (sends one
+datagram so the device learns our IP) and then listens:
 
 ```sh
-./udp-monitor.sh                 # = nc -lup 9001
+./udp-monitor.sh                 # or: ./udp-monitor.sh <hostname>
 ```
 
-Expected output:
+Expected output (a new line every ~2s):
 
 ```
-Booted 'as7343' fw=0.1.0-scaffold ip=192.168.x.y
-[status] up=2s ip=192.168.x.y rssi=-52dBm heap=...
+status dest -> 192.168.x.y:9001
+[status] up=2s ip=192.168.x.z rssi=-52dBm heap=...
+[status] up=4s ip=192.168.x.z rssi=-52dBm heap=...
 ```
+
+We unicast to a learned host rather than broadcast because OpenBSD `nc` (the
+Debian default) locks onto the first sender in UDP listen mode and then drops
+broadcast packets, so only one would ever arrive.
