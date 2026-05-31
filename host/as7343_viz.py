@@ -95,7 +95,23 @@ def parse_osc(data):
     return addr, args
 
 
+def bar_row(prefix, label, nm, val, scale):
+    r, g, b = wavelength_to_rgb(nm)
+    n = min(int(round(val / scale * BAR_WIDTH)), BAR_WIDTH)
+    bar = f"\x1b[38;2;{r};{g};{b}m" + "█" * n + "\x1b[0m"
+    return f"{prefix}{label:>12} {bar}{' ' * (BAR_WIDTH - n)} {val:>5}\x1b[0K\n"
+
+
 def render(values, meta, bands=BANDS, show_index=False):
+    # In the normal (spectral) view the last entry is Clear, a broadband
+    # intensity reading that's almost always the largest. Pull it out so the
+    # auto-scale follows the spectral bands' shape instead of being pinned to
+    # Clear; show Clear separately as an intensity/headroom readout.
+    clear = None
+    if not show_index and bands is BANDS:
+        clear = values[-1]
+        bands, values = bands[:-1], values[:-1]
+
     out = ["\x1b[H"]  # cursor home
     title = "AS7343 RAW (unmapped buffer)" if show_index else "AS7343"
     out.append(f"{title}  <-  {DEVICE}   (gain_idx={meta.get('gain', '?')} "
@@ -105,16 +121,26 @@ def render(values, meta, bands=BANDS, show_index=False):
         sat += "  \x1b[1;31mANALOG SATURATED\x1b[0m"
     if meta.get("dsat"):
         sat += "  \x1b[1;31mDIGITAL SATURATED\x1b[0m"
-    out.append(f"peak={max(values) if values else 0}{sat}\x1b[0K\n\n")
+    out.append(f"spectral peak={max(values) if values else 0}{sat}\x1b[0K\n\n")
 
     scale = max(max(values), 1) if values else 1
     for i, ((name, nm), val) in enumerate(zip(bands, values)):
-        r, g, b = wavelength_to_rgb(nm)
-        n = int(round(val / scale * BAR_WIDTH))
-        bar = f"\x1b[38;2;{r};{g};{b}m" + "█" * n + "\x1b[0m"
-        label = f"{name:>5}" + (f" {nm}nm" if nm else "  clear")
         prefix = f"[{i:>2}] " if show_index else ""
-        out.append(f"{prefix}{label:>12} {bar}{' ' * (BAR_WIDTH - n)} {val:>5}\x1b[0K\n")
+        label = f"{name:>5}" + (f" {nm}nm" if nm else "  clear")
+        out.append(bar_row(prefix, label, nm, val, scale))
+
+    if clear is not None:
+        # Clear bar is scaled to the ADC full-scale ceiling (derived from the
+        # integration time: max counts = t_int / 2.78us step), so it reads as
+        # absolute intensity / how much saturation headroom is left.
+        ceiling = round(meta["int_ms"] * 1000 / 2.78) if meta.get("int_ms") else scale
+        ceiling = min(ceiling, 65535)
+        pct = round(100 * clear / ceiling) if ceiling else 0
+        out.append("\x1b[0K\n")
+        out.append(bar_row("", "Clear/VIS", None, clear, max(ceiling, 1)))
+        out.append(f"{'':>12} broadband intensity — {pct}% of full-scale "
+                   f"({ceiling})\x1b[0K\n")
+
     out.append("\x1b[0J")  # clear anything below
     sys.stdout.write("".join(out))
     sys.stdout.flush()

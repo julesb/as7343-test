@@ -17,9 +17,12 @@ confirm the expected index responds.
 
 It registers with the device (sends a datagram to UDP 9001 so the firmware
 learns where to stream), then listens on UDP 9000 and redraws on every frame.
-Each band is coloured by its approximate visible wavelength; `Clear` is the
-broadband channel. The header shows gain index, integration time, and a
-saturation warning when a channel rails.
+Each band is coloured by its approximate visible wavelength, auto-scaled to the
+spectral peak so the spectrum's *shape* is visible. `Clear`/VIS (the unfiltered
+broadband intensity) is shown separately below, scaled to the ADC full-scale so
+it reads as absolute intensity / saturation headroom rather than dominating the
+auto-scale. The header shows gain index, integration time, and a saturation
+warning when a channel rails.
 
 Quit with Ctrl-C (restores the cursor).
 
