@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include <Adafruit_AS7343.h>
 #include <OSCMessage.h>
+#include <math.h>
 
 #include "config.h"
 
@@ -15,6 +16,18 @@ WiFiUDP udp;
 IPAddress statusDest;        // host to send status/OSC to; learned from incoming packets
 Adafruit_AS7343 as7343;
 bool sensorOk = false;
+
+// Runtime-tunable settings (seeded from config.h, then overridable via OSC).
+// Gain has to be tracked here because the chip has no read-back for it, and we
+// report it in /as7343/meta. Integration time we can read back from the chip.
+int currentGain = AS7343_GAIN;
+
+// Integration time is set as a millisecond value over OSC and converted to the
+// chip's ATIME/ASTEP pair. We hold ASTEP fixed at the library default (599 ->
+// 1.668 ms/step) and vary ATIME: that keeps each step's max count past the
+// 16-bit ADC ceiling, so the full dynamic range is preserved at any IT.
+static const uint16_t ASTEP_FIXED = 599;
+static const float    STEP_MS     = (ASTEP_FIXED + 1) * 0.00278f;  // ~1.668 ms
 
 // Spectral bands in ascending-wavelength order. `idx` is the band's position in
 // the 18-entry buffer returned by readAllChannels() in auto-SMUX 18-channel mode.
@@ -91,11 +104,11 @@ void initSensor() {
     }
 
     as7343.setSMUXMode(AS7343_SMUX_18CH);          // all spectral channels
-    as7343.setGain((as7343_gain_t)AS7343_GAIN);
+    as7343.setGain((as7343_gain_t)currentGain);
 
     sensorOk = true;
     udpLog("AS7343 ok: id=0x%02X gain_idx=%d intTime=%.1fms\n",
-           as7343.getPartID(), AS7343_GAIN, as7343.getIntegrationTime());
+           as7343.getPartID(), currentGain, as7343.getIntegrationTime());
 }
 
 void sendOSC(const char* addr, OSCMessage& msg) {
@@ -103,6 +116,52 @@ void sendOSC(const char* addr, OSCMessage& msg) {
     msg.send(udp);
     udp.endPacket();
     msg.empty();
+}
+
+// --- Incoming OSC control (push from host) -------------------------------
+// Read a numeric argument as float, accepting either OSC int or float types.
+// Returns false if arg `i` is missing or non-numeric.
+static bool oscNum(OSCMessage& msg, int i, float& out) {
+    if (i >= msg.size()) return false;
+    if (msg.isFloat(i))    { out = msg.getFloat(i); return true; }
+    if (msg.isInt(i))      { out = (float)msg.getInt(i); return true; }
+    return false;
+}
+
+// /as7343/set/gain <gain_idx 0..12>  -- analog gain, 0.5x..2048x
+void oscSetGain(OSCMessage& msg) {
+    float v;
+    if (!sensorOk || !oscNum(msg, 0, v)) return;
+    int g = (int)lroundf(v);
+    if (g < 0)  g = 0;
+    if (g > 12) g = 12;
+    as7343.setGain((as7343_gain_t)g);
+    currentGain = g;
+    udpLog("set gain -> idx=%d\n", g);
+}
+
+// /as7343/set/inttime <ms>  -- integration time in milliseconds. Quantised to
+// the ASTEP step (~1.668 ms); range ~1.7..427 ms (ATIME 0..255).
+void oscSetIntTime(OSCMessage& msg) {
+    float ms;
+    if (!sensorOk || !oscNum(msg, 0, ms)) return;
+    long atime = lroundf(ms / STEP_MS) - 1;
+    if (atime < 0)   atime = 0;
+    if (atime > 255) atime = 255;
+    as7343.setASTEP(ASTEP_FIXED);
+    as7343.setATIME((uint8_t)atime);
+    udpLog("set inttime -> req=%.1fms actual=%.1fms (atime=%ld astep=%d)\n",
+           ms, as7343.getIntegrationTime(), atime, ASTEP_FIXED);
+}
+
+// Parse a received datagram as OSC and route control messages. Non-OSC packets
+// (e.g. plain host-registration datagrams) fail to parse and are ignored here.
+void handleIncomingOSC(uint8_t* data, int len) {
+    OSCMessage msg;
+    msg.fill(data, len);
+    if (msg.hasError()) return;
+    msg.dispatch("/as7343/set/gain",    oscSetGain);
+    msg.dispatch("/as7343/set/inttime", oscSetIntTime);
 }
 
 void readAndStream() {
@@ -135,7 +194,7 @@ void readAndStream() {
 
     // /as7343/meta <gain_idx int> <intTime ms float> <analogSat int> <digitalSat int>
     OSCMessage meta("/as7343/meta");
-    meta.add((int32_t)AS7343_GAIN);
+    meta.add((int32_t)currentGain);
     meta.add(as7343.getIntegrationTime());
     meta.add((int32_t)as7343.isAnalogSaturated());
     meta.add((int32_t)as7343.isDigitalSaturated());
@@ -173,16 +232,19 @@ void loop() {
         connectWiFi();
     }
 
-    // Any incoming datagram registers (or updates) the status/OSC destination.
+    // Any incoming datagram registers (or updates) the status/OSC destination;
+    // it's also parsed as OSC so the host can push /as7343/set/* control here.
     int packetSize = udp.parsePacket();
     if (packetSize > 0) {
         IPAddress src = udp.remoteIP();
-        while (udp.available()) udp.read();   // drain payload, we don't need it
+        uint8_t pkt[128];
+        int len = udp.read(pkt, sizeof(pkt));
         if (statusDest != src) {
             statusDest = src;
             udpLog("dest -> %s (status:%d osc:%d)\n",
                    statusDest.toString().c_str(), LOG_PORT, OSC_PORT);
         }
+        if (len > 0) handleIncomingOSC(pkt, len);
     }
 
     unsigned long now = millis();

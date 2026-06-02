@@ -49,7 +49,21 @@ host/as7343_viz.py               # or: host/as7343_viz.py <hostname|ip>
 ```
 
 See `host/README.md` for details. Gain and sample rate are tunable in
-`config.h` (`AS7343_GAIN`, `SAMPLE_INTERVAL_MS`).
+`config.h` (`AS7343_GAIN`, `SAMPLE_INTERVAL_MS`); gain and integration time are
+also tunable live over OSC (below).
+
+## Control (OSC)
+
+The host pushes control messages to the device's UDP `LOG_PORT` (9001) — the
+same port it registers on. Changes take effect on the next sample and are
+echoed back in `/as7343/meta`.
+
+- `/as7343/set/gain <int>` — analog gain index, `0..12` (0.5×…2048×), clamped.
+  Default `7` (64×), from `AS7343_GAIN` in `config.h`.
+- `/as7343/set/inttime <float|int>` — integration time in **milliseconds**,
+  ~1.7…427 ms. Quantised to the ~1.668 ms ASTEP step (ASTEP held at 599 to keep
+  the full 16-bit dynamic range; ATIME is varied). Default ~50 ms (the library
+  boot default; not set in firmware).
 
 ## Setup
 
